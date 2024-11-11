@@ -1,179 +1,178 @@
-import {useState} from 'react';
+import { useState } from "react";
 import axios from "axios";
 import PromptInput from "../PromptInput/PromptInput";
-import './App.css';
-import {ResponseInterface} from "../PromptResponseList/response-interface";
+import {
+  ResponseInterface,
+  ApiResponse
+} from "../PromptResponseList/response-interface";
 import PromptResponseList from "../PromptResponseList/PromptResponseList";
 
-type ModelValueType = 'gpt' | 'codex' | 'image';
 const App = () => {
-
   const [responseList, setResponseList] = useState<ResponseInterface[]>([]);
-  const [prompt, setPrompt] = useState<string>('');
-  const [promptToRetry, setPromptToRetry] = useState<string | null>(null);
-  const [uniqueIdToRetry, setUniqueIdToRetry] = useState<string | null>(null);
-  const [modelValue, setModelValue] = useState<ModelValueType>('gpt');
+  const [prompt, setPrompt] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
-  let loadInterval: number | undefined;
 
-  const generateUniqueId = () => {
-    const timestamp = Date.now();
-    const randomNumber = Math.random();
-    const hexadecimalString = randomNumber.toString(16);
+  const BACKEND_URL = "http://localhost:5000";
 
-    return `id-${timestamp}-${hexadecimalString}`;
-  }
+  const generateUniqueId = (): string => {
+    return `${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+  };
 
-  const htmlToText = (html: string) => {
-    const temp = document.createElement('div');
-    temp.innerHTML = html;
-    return temp.textContent;
-  }
+  const addResponse = (selfFlag: boolean, response?: ApiResponse): string => {
+    const id = generateUniqueId();
+    const newResponse: ResponseInterface = {
+      id,
+      response,
+      selfFlag,
+      image: selfFlag ? "/verified-user.png" : "/chatbot.png"
+    };
+    setResponseList((prev) => [...prev, newResponse]);
+    return id;
+  };
 
-  const delay = (ms: number) => {
-    return new Promise( resolve => setTimeout(resolve, ms) );
-  }
+  const updateResponse = (id: string, updates: Partial<ResponseInterface>) => {
+    setResponseList((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, ...updates } : item))
+    );
+  };
 
-  const addLoader = (uid: string) => {
-    const element = document.getElementById(uid) as HTMLElement;
-    element.textContent = ''
-
-    // @ts-ignore
-    loadInterval = setInterval(() => {
-      // Update the text content of the loading indicator
-      element.textContent += '.';
-
-      // If the loading indicator has reached three dots, reset it
-      if (element.textContent === '....') {
-        element.textContent = '';
-      }
-    }, 300);
-  }
-
-
-  const addResponse = (selfFlag: boolean, response?: string) => {
-    const uid = generateUniqueId()
-    setResponseList(prevResponses => [
-      ...prevResponses,
-      {
-        id: uid,
-        response,
-        selfFlag
-      },
-    ]);
-    return uid;
-  }
-
-  const updateResponse = (uid: string, updatedObject: Record<string, unknown>) => {
-    setResponseList(prevResponses => {
-      const updatedList = [...prevResponses]
-      const index = prevResponses.findIndex((response) => response.id === uid);
-      if (index > -1) {
-        updatedList[index] = {
-          ...updatedList[index],
-          ...updatedObject
-        }
-      }
-      return updatedList;
-    });
-  }
-
-  const regenerateResponse = async () => {
-    await getGPTResult(promptToRetry, uniqueIdToRetry);
-  }
-
-  const getGPTResult = async (_promptToRetry?: string | null, _uniqueIdToRetry?: string | null) => {
-    // Get the prompt input
-    const _prompt = _promptToRetry ?? htmlToText(prompt);
-
-    // If a response is already being generated or the prompt is empty, return
-    if (isLoading || !_prompt) {
-      return;
-    }
+  const handlePromptSubmit = async () => {
+    if (!prompt.trim() || isLoading) return;
 
     setIsLoading(true);
+    const userPromptId = addResponse(true, {
+      text: {
+        temporal_context: {
+          history_context: prompt
+        }
+      }
+    });
 
-    // Clear the prompt input
-    setPrompt('');
-
-    let uniqueId: string;
-    if (_uniqueIdToRetry) {
-      uniqueId = _uniqueIdToRetry;
-    } else {
-      // Add the self prompt to the response list
-      addResponse(true, _prompt);
-      uniqueId = addResponse(false);
-      await delay(50);
-      addLoader(uniqueId);
-    }
+    const loadingResponseId = addResponse(false, {
+      text: {
+        temporal_context: {
+          history_context: "Loading..."
+        }
+      }
+    });
 
     try {
-      // Send a POST request to the API with the prompt in the request body
-      const response = await axios.post('get-prompt-result', {
-        prompt: _prompt,
-        model: modelValue
-      });
-      if (modelValue === 'image') {
-        // Show image for `Create image` model
-        updateResponse(uniqueId, {
-          image: response.data,
-        });
-      } else {
-        updateResponse(uniqueId, {
-          response: response.data.trim(),
-        });
+      const { data } = await axios.post(
+        `${BACKEND_URL}/get-prompt-result`,
+        { prompt },
+        {
+          headers: {
+            "Content-Type": "application/json"
+          },
+          timeout: 30000
+        }
+      );
+
+      if (data.error) {
+        throw new Error(data.error);
       }
 
-      setPromptToRetry(null);
-      setUniqueIdToRetry(null);
-    } catch (err) {
-      setPromptToRetry(_prompt);
-      setUniqueIdToRetry(uniqueId);
-      updateResponse(uniqueId, {
-        // @ts-ignore
-        response: `Error: ${err.message}`,
+      updateResponse(loadingResponseId, {
+        response: data.data,
+        error: false
+      });
+    } catch (error) {
+      const errorMessage =
+        (error as any)?.response?.data?.error ||
+        (error as Error).message ||
+        "An error occurred while processing your request";
+
+      updateResponse(loadingResponseId, {
+        response: {
+          text: {
+            temporal_context: {
+              history_context: `Error: ${errorMessage}`
+            }
+          }
+        },
         error: true
       });
     } finally {
-      // Clear the loader interval
-      clearInterval(loadInterval);
       setIsLoading(false);
+      setPrompt("");
     }
-  }
+  };
 
   return (
-    <div className="App">
-      <div id="response-list">
-        <PromptResponseList responseList={responseList} key="response-list"/>
-      </div>
-      { uniqueIdToRetry &&
-        (<div id="regenerate-button-container">
-          <button id="regenerate-response-button" className={isLoading ? 'loading' : ''} onClick={() => regenerateResponse()}>
-            Regenerate Response
-          </button>
+    <div className="flex flex-col h-screen bg-gray-50">
+      <header className="fixed top-0 left-0 right-0 bg-emerald-600 text-white py-4 px-4 shadow-lg z-50">
+        <div className="flex items-center justify-center space-x-4 max-w-7xl mx-auto">
+          <div className="bg-white p-2 rounded-full shadow-md">
+            <img
+              src="/chatbot.png"
+              width={40}
+              height={40}
+              alt="MediSearch Logo"
+              className="w-10 h-10 object-contain"
+            />
+          </div>
+          <div>
+            <h1 className="text-3xl font-bold">MediSearch</h1>
+            <p className="text-lg opacity-90">Your AI Health Assistant</p>
+          </div>
         </div>
-        )
-      }
-      <div id="model-select-container">
-        <label htmlFor="model-select">Select model:</label>
-        <select id="model-select" value={modelValue} onChange={(event) => setModelValue(event.target.value as ModelValueType)}>
-          <option value="gpt">GPT-3 (Understand and generate natural language )</option>
-          <option value="codex">Codex (Understand and generate code, including translating natural language to code)
-          </option>
-          <option value="image">Create Image (Create AI image using DALL·E models)</option>
-        </select>
-      </div>
-      <div id="input-container">
-        <PromptInput
-          prompt={prompt}
-          onSubmit={() => getGPTResult()}
-          key="prompt-input"
-          updatePrompt={(prompt) => setPrompt(prompt)}
-        />
-        <button id="submit-button" className={isLoading ? 'loading' : ''} onClick={() => getGPTResult()}></button>
+      </header>
+
+      <main className="flex-1 container mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 relative">
+        <div className="h-full flex flex-col pt-6 pb-32">
+          <div className="flex-1 min-h-0">
+            <PromptResponseList responseList={responseList} />
+          </div>
+        </div>
+      </main>
+
+      <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-gray-50 via-gray-50">
+        <div className="container mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 pb-6 pt-2">
+          <div className="bg-white rounded-lg shadow-lg border border-gray-200 p-4">
+            <PromptInput
+              prompt={prompt}
+              onSubmit={handlePromptSubmit}
+              updatePrompt={setPrompt}
+              isLoading={isLoading}
+            />
+            <button
+              className={`w-full mt-3 px-4 py-3 bg-emerald-600 text-white rounded-lg
+                         hover:bg-emerald-700 transition-colors duration-200
+                         focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2
+                         disabled:opacity-50 disabled:cursor-not-allowed
+                         shadow-sm`}
+              onClick={handlePromptSubmit}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <span className="flex items-center justify-center space-x-2">
+                  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                      fill="none"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    />
+                  </svg>
+                  <span>Processing...</span>
+                </span>
+              ) : (
+                "Send"
+              )}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
-}
+};
 
 export default App;
